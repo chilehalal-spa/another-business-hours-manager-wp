@@ -3,10 +3,6 @@ if (!defined('ABSPATH')) exit;
 
 class ABH_Logic {
 
-    /**
-     * Obtiene feriados de la API de Chile y cachea por 24hrs
-     * CAMBIO: Ahora es PUBLIC para poder usarla en el shortcode
-     */
     public static function get_holidays_api() {
         $year = date('Y');
         $transient_key = 'abh_holidays_' . $year;
@@ -14,7 +10,8 @@ class ABH_Logic {
         $holidays = get_transient($transient_key);
 
         if (false === $holidays) {
-            $response = wp_remote_get("https://apis.digital.gob.cl/fl/feriados/{$year}");
+            // Aumentamos el timeout por si la API es lenta
+            $response = wp_remote_get("https://apis.digital.gob.cl/fl/feriados/{$year}", array('timeout' => 10));
             
             if (is_wp_error($response)) {
                 return []; 
@@ -24,11 +21,12 @@ class ABH_Logic {
             $data = json_decode($body, true);
             
             $holidays = [];
-            if (!empty($data)) {
+            if (!empty($data) && is_array($data)) {
                 foreach ($data as $h) {
                     $holidays[] = $h['fecha']; 
                 }
             }
+            // Cache por 24 horas
             set_transient($transient_key, $holidays, 24 * HOUR_IN_SECONDS);
         }
         
@@ -36,12 +34,14 @@ class ABH_Logic {
     }
 
     public static function get_current_status() {
-        date_default_timezone_set('America/Santiago'); 
+        // CORRECCIÓN: Usamos DateTime con zona horaria específica sin afectar al global
+        $timezone = new DateTimeZone('America/Santiago');
+        $now = new DateTime('now', $timezone);
         
-        $now = current_time('timestamp');
-        $today_date = date('Y-m-d', $now);
-        $current_time = date('H:i', $now);
-        $day_keyword = strtolower(date('l', $now));
+        $today_date = $now->format('Y-m-d');
+        $current_time = $now->format('H:i');
+        // 'N' devuelve 1 (lunes) a 7 (domingo), útil para mapear si quisieras
+        $day_keyword = strtolower($now->format('l')); // 'monday', 'tuesday'...
 
         // 1. Verificar Feriados
         $holidays = self::get_holidays_api();
@@ -54,7 +54,7 @@ class ABH_Logic {
             return ['status' => 'closed', 'msg' => 'Cerrado hoy', 'class' => 'closed'];
         }
 
-        // 3. Verificar Horarios (Turno 1 y Turno 2)
+        // 3. Verificar Horarios
         $start1 = get_option("abh_{$day_keyword}_start");
         $end1   = get_option("abh_{$day_keyword}_end");
         
@@ -63,14 +63,12 @@ class ABH_Logic {
 
         $is_open = false;
 
-        // Chequear Turno 1
         if ($start1 && $end1) {
             if ($current_time >= $start1 && $current_time <= $end1) {
                 $is_open = true;
             }
         }
 
-        // Chequear Turno 2
         if (!$is_open && $start2 && $end2) {
             if ($current_time >= $start2 && $current_time <= $end2) {
                 $is_open = true;
